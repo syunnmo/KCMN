@@ -45,7 +45,6 @@ class MODEL(nn.Module):
 
         self.exercise_embed = nn.Embedding(self.n_exercise + 1, self.exercise_embed_dim, padding_idx=0)
 
-        # 知识点对习题的attention
         # self.exercise_kc_attentions = [
         #     Exercise_KC_GraphAttentionLayer(self.exercise_embed_dim, self.exercise_embed_dim, dropout=self.dropout, alpha=self.alpha, mode=self.mode,
         #                                     concat=True) for _ in range(self.nheads)]
@@ -100,7 +99,7 @@ class MODEL(nn.Module):
 
 
         slice_exercise_respond_data = torch.chunk(exercise_respond_data, seqlen, 1)
-        # 全零向量拼接，答对拼右边，答错拼左边
+ 
         zeros = torch.zeros_like(exercise_embedding)
         cat1 = torch.cat((zeros, exercise_embedding), -1)
         cat2 = torch.cat((exercise_embedding, zeros), -1)
@@ -251,7 +250,7 @@ class Exercise_KC_GraphAttentionLayer(nn.Module):
             zero_vec = -9e15 * torch.ones_like(e)
             attention = torch.where(adj_exercise_kc > 0, e, zero_vec)
             attention = F.softmax(attention, dim=1)
-            new_kc_embed = torch.matmul(attention, kc_Wh)#得到了相对每个习题的知识点信息
+            new_kc_embed = torch.matmul(attention, kc_Wh)
 
             if self.mode == 1:
                 exercises_embedd = torch.cat((new_kc_embed, exercise_h), dim=1)
@@ -276,7 +275,6 @@ class Exercise_KC_GraphAttentionLayer(nn.Module):
         Wh_repeated_in_chunks = exercise_Wh.repeat_interleave(N_kc, dim=0)
         Wh_repeated_alternating = kc_Wh.repeat(N_exercise, 1)
         all_combinations_matrix = torch.cat([Wh_repeated_in_chunks, Wh_repeated_alternating], dim=1)
-        # 返回的结果是N_exercise*N_kc*2 * self.out_features,前N行即第一个节点和其他所有节点的拼接（包括本节点的拼接）
         return all_combinations_matrix.view(N_exercise, N_kc, 2 * self.out_features)
 
     def __repr__(self):
@@ -284,7 +282,6 @@ class Exercise_KC_GraphAttentionLayer(nn.Module):
 
 
 
-# 聚集知识点信息获得属于习题节点的知识点信息，并对差异性信息进行组合处理
 class Exercise_KC_GraphConvolution(nn.Module):
     def __init__(self, in_features, out_features, dropout, alpha, concat=True):
         super(Exercise_KC_GraphConvolution, self).__init__()
@@ -311,7 +308,6 @@ class Exercise_KC_GraphConvolution(nn.Module):
         self.leakyrelu = nn.LeakyReLU(self.alpha)
 
     def forward(self, exercise_h, kc_h, adj_exercise_kc):
-        # 前面的nhead是聚合邻居信息
         if self.concat:
             kc_Wh = torch.mm(kc_h, self.W1)
             exercise_Wh = torch.mm(exercise_h, self.W1)
