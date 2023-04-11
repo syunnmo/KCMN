@@ -1,2 +1,2 @@
 # KCMN
-The manuscript has not been published, so we only show the core part of this model.
+The manuscript has not been published, so we only show the main part of this model.
