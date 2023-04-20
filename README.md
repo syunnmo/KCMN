@@ -23,7 +23,7 @@ __Environment__:
 * torch 1.7.0
 * numpy 1.19.2
 
-# Running FGKT
+# Running KCMN
 Here is a example for using FGKT model (on EdNet):  
 ```
   python main.py --dataset ednet  
