@@ -30,10 +30,12 @@ Here is a example for using FGKT model (on EdNet):
 ```
 
 Explanation of parameters:  
-* gpu: Specify the GPU to be used, e.g '0,1,2,3'. If CPU is used then fill in -1.
-* patience: Maximum number of times if validation loss does not decrease.
-* lr: Learning rate
-* num_heads: Number of head attentions.
-* mode: Selection of integration function.
-* exercise_embed_dim: Number of exercise embedding dimensions.
-* batch_size: Number of batch size.
+* gpu : Specify the GPU to be used, e.g '0,1,2,3'. If CPU is used then fill in -1.
+* exercise_embed_dim : Number of exercise embedding dimensions.
+* batch_size : Number of batch size.
+* max_step : The allowed maximum length of a sequence.
+* init_lr : Learning rate.
+* num_heads : Number of head attentions.
+* mode : Selection of integration function.
+
+
