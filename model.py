@@ -3,7 +3,6 @@ import torch.nn as nn
 from memory import DKVMN
 import numpy as np
 import utils as utils
-import math
 import embedd_loss as embedd_loss
 import torch.nn.functional as F
 class MODEL(nn.Module):
@@ -27,8 +26,7 @@ class MODEL(nn.Module):
         self.mode = params.mode
 
         self.read_embed_linear = nn.Linear(self.memory_value_state_dim + self.final_fc_dim, self.final_fc_dim, bias=True)
-        # self.predict_linear = nn.Linear(self.final_fc_dim, 1, bias=True)
-        self.predict_linear = nn.Linear(self.final_fc_dim * 2, 1, bias=True)
+        self.predict_linear = nn.Linear(self.final_fc_dim, 1, bias=True)
 
         self.init_memory_key = nn.Parameter(torch.randn(self.memory_size, self.memory_key_state_dim))
         nn.init.kaiming_normal(self.init_memory_key)
@@ -45,13 +43,12 @@ class MODEL(nn.Module):
 
         self.exercise_embed = nn.Embedding(self.n_exercise + 1, self.exercise_embed_dim, padding_idx=0)
 
-        # self.exercise_kc_attentions = [
-        #     Exercise_KC_GraphAttentionLayer(self.exercise_embed_dim, self.exercise_embed_dim, dropout=self.dropout, alpha=self.alpha, mode=self.mode,
-        #                                     concat=True) for _ in range(self.nheads)]
-        # for i, attention in enumerate(self.exercise_kc_attentions):
-        #     self.add_module('exercise_kc_attention_{}'.format(i), attention)
-
-        self.recall_information = recall_component(exercise_embed_dim, params.max_step, self.nheads, self.params.gpu, self.params.dropout)
+        # 知识点对习题的attention
+        self.exercise_kc_attentions = [
+            Exercise_KC_GraphAttentionLayer(self.exercise_embed_dim, self.exercise_embed_dim, dropout=self.dropout, alpha=self.alpha, mode=self.mode,
+                                            concat=True) for _ in range(self.nheads)]
+        for i, attention in enumerate(self.exercise_kc_attentions):
+            self.add_module('exercise_kc_attention_{}'.format(i), attention)
 
         self.init_params()
         self.init_embeddings()
@@ -75,16 +72,17 @@ class MODEL(nn.Module):
         exercise_node = utils.varible(torch.linspace(1, self.n_exercise, steps=self.n_exercise).long(), self.params.gpu)
         exercise_node_embedding = self.exercise_embed(exercise_node)
 
-        exercise_embedding = exercise_node_embedding
+        # exercise_embedding_list = [att(exercise_node_embedding, kc_node_mebedding, adj_exercise_kc) for att in self.exercise_kc_attentions]
+        # exercise_embedding = utils.varible(torch.zeros(self.n_exercise, self.exercise_embed_dim), self.params.gpu)
+        # for i, propagated_exercise_embedding in enumerate(exercise_embedding_list):
+        #     exercise_embedding = exercise_embedding.add_(propagated_exercise_embedding)
+        # exercise_embedding = exercise_embedding / (i+1)
+        #
+        # exercise_embedding_add_zero = torch.cat([utils.varible(torch.zeros(1, exercise_embedding.shape[1]),self.params.gpu), exercise_embedding], dim=0)
+
+        exercise_embedding = torch.cat([att(exercise_node_embedding, kc_node_mebedding, adj_exercise_kc) for att in self.exercise_kc_attentions], dim=1).view(self.n_exercise, self.exercise_embed_dim ,self.nheads).mean(2)
         exercise_embedding_add_zero = torch.cat(
-            [utils.varible(torch.zeros(1, exercise_embedding.shape[1]), self.params.gpu), exercise_embedding],
-            dim=0)
-
-        # exercise_embedding = torch.cat([att(exercise_node_embedding, kc_node_mebedding, adj_exercise_kc) for att in self.exercise_kc_attentions], dim=1).view(self.n_exercise, self.exercise_embed_dim ,self.nheads).mean(2)
-        # exercise_embedding_add_zero = torch.cat(
-        #     [utils.varible(torch.zeros(1, exercise_embedding.shape[1]), self.params.gpu), exercise_embedding], dim=0)
-
-
+            [utils.varible(torch.zeros(1, exercise_embedding.shape[1]), self.params.gpu), exercise_embedding], dim=0)
 
 
         memory_value = nn.Parameter(torch.cat([self.init_memory_value.unsqueeze(0) for _ in range(batch_size)], 0).data)
@@ -99,7 +97,7 @@ class MODEL(nn.Module):
 
 
         slice_exercise_respond_data = torch.chunk(exercise_respond_data, seqlen, 1)
- 
+        # 全零向量拼接，答对拼右边，答错拼左边
         zeros = torch.zeros_like(exercise_embedding)
         cat1 = torch.cat((zeros, exercise_embedding), -1)
         cat2 = torch.cat((exercise_embedding, zeros), -1)
@@ -132,16 +130,10 @@ class MODEL(nn.Module):
         all_read_value_content = torch.cat([value_read_content_l[i].unsqueeze(1) for i in range(seqlen)], 1)
         input_embed_content = torch.cat([input_embed_l[i].unsqueeze(1) for i in range(seqlen)], 1)
 
-
         predict_input = torch.cat([all_read_value_content, input_embed_content], 2)
-        read_content_embed = torch.tanh(self.read_embed_linear(predict_input))
+        read_content_embed = torch.tanh(self.read_embed_linear(predict_input.view(batch_size*seqlen, -1)))
 
-        recall_info = self.recall_information(slice_exercise_embedd_data, read_content_embed)
-        read_content_embed_ = torch.cat([read_content_embed, recall_info], 2)
-
-        pred = self.predict_linear(read_content_embed_)
-
-        # pred = self.predict_linear(read_content_embed)
+        pred = self.predict_linear(read_content_embed)
         # predicts = torch.cat([predict_logs[i] for i in range(seqlen)], 1)
         target_1d = target                   # [batch_size * seq_len, 1]
         mask = target_1d.ge(0)               # [batch_size * seq_len, 1]
@@ -152,65 +144,11 @@ class MODEL(nn.Module):
         filtered_target = torch.masked_select(target_1d, mask)
         predict_loss = torch.nn.functional.binary_cross_entropy_with_logits(filtered_pred, filtered_target)
 
-        # kc_exercises_embedd_loss = embedd_loss.kc_exercises_embedd_loss(adj_exercise_kc, kc_node_mebedding, exercise_embedding)
-        #
-        # loss = predict_loss + 1 * kc_exercises_embedd_loss
-        loss = predict_loss
+        kc_exercises_embedd_loss = embedd_loss.kc_exercises_embedd_loss(adj_exercise_kc, kc_node_mebedding, exercise_embedding)
+
+        loss = predict_loss + kc_exercises_embedd_loss
 
         return loss, torch.sigmoid(filtered_pred), filtered_target
-
-
-class recall_component(nn.Module):
-    def __init__(self, exercise_embed_dim, maxstep, num_heads, gpu, dropout):
-        super().__init__()
-        self.embed = exercise_embed_dim
-        self.num_heads = num_heads
-        self.maxstep = maxstep
-        self.gpu = gpu
-        self.dropout = nn.Dropout(dropout)
-        self.linear_q = nn.Linear(self.embed, self.embed, bias=True)
-        self.linear_k = nn.Linear(self.embed, self.embed, bias=True)
-        self.linear_v = nn.Linear(self.embed, self.embed, bias=True)
-        self.out_proj = nn.Linear(self.embed, self.embed, bias=True)
-        self.init_params()
-
-    def init_params(self):
-        nn.init.kaiming_normal(self.linear_q.weight)
-        nn.init.kaiming_normal(self.linear_k.weight)
-        nn.init.kaiming_normal(self.linear_v.weight)
-        nn.init.kaiming_normal(self.out_proj.weight)
-        nn.init.constant(self.linear_q.bias, 0)
-        nn.init.constant(self.linear_k.bias, 0)
-        nn.init.constant(self.linear_v.bias, 0)
-        nn.init.constant(self.out_proj.bias, 0)
-
-    def forward(self, slice_exercise_embedd_data, read_content_embed):
-
-        nopeek_mask = np.triu(np.ones((1, 1, self.maxstep, self.maxstep)), k=0).astype('uint8') # k = 0 means, it can peek only past values. 1 means, block can peek only current and pas values
-        mask = utils.varible((torch.from_numpy(nopeek_mask) == 0), self.gpu)
-
-        exercise_embedd_data = torch.cat([slice_exercise_embedd_data[i].unsqueeze(1) for i in range(self.maxstep)], 1)
-        batch_size = exercise_embedd_data.size(0)
-
-        q_value = self.linear_q(exercise_embedd_data).view(batch_size, self.maxstep, self.num_heads, self.embed // self.num_heads)
-        k_value = self.linear_k(exercise_embedd_data).view(batch_size, self.maxstep, self.num_heads, self.embed // self.num_heads)
-        v_value = self.linear_v(read_content_embed).view(batch_size, self.maxstep, self.num_heads, self.embed// self.num_heads)
-        # transpose to get dimensions bs * h * sl * d_model
-        q = q_value.transpose(1, 2)
-        k = k_value.transpose(1, 2)
-        v = v_value.transpose(1, 2)
-
-        scores = torch.matmul(q, k.transpose(-2, -1)) / \
-                 math.sqrt(self.embed)  # BS, heads, maxstep, maxstep
-        scores.masked_fill_(mask == 0, -1e32)
-        scores = F.softmax(scores, dim=-1)
-        pad_zero = utils.varible(torch.zeros(batch_size, self.num_heads, 1, self.maxstep), self.gpu)
-        scores = torch.cat([pad_zero, scores[:, :, 1:, :]], dim=2)
-        scores = self.dropout(scores)
-        scores = torch.matmul(scores, v)
-        concat = scores.transpose(1, 2).contiguous().view(batch_size, -1, self.embed)
-        output = self.out_proj(concat)
-        return output
 
 class Exercise_KC_GraphAttentionLayer(nn.Module):
     def __init__(self, in_features, out_features, dropout, alpha, mode, concat=True):
@@ -250,7 +188,7 @@ class Exercise_KC_GraphAttentionLayer(nn.Module):
             zero_vec = -9e15 * torch.ones_like(e)
             attention = torch.where(adj_exercise_kc > 0, e, zero_vec)
             attention = F.softmax(attention, dim=1)
-            new_kc_embed = torch.matmul(attention, kc_Wh)
+            new_kc_embed = torch.matmul(attention, kc_Wh)#得到了相对每个习题的知识点信息
 
             if self.mode == 1:
                 exercises_embedd = torch.cat((new_kc_embed, exercise_h), dim=1)
@@ -275,6 +213,7 @@ class Exercise_KC_GraphAttentionLayer(nn.Module):
         Wh_repeated_in_chunks = exercise_Wh.repeat_interleave(N_kc, dim=0)
         Wh_repeated_alternating = kc_Wh.repeat(N_exercise, 1)
         all_combinations_matrix = torch.cat([Wh_repeated_in_chunks, Wh_repeated_alternating], dim=1)
+        # 返回的结果是N_exercise*N_kc*2 * self.out_features,前N行即第一个节点和其他所有节点的拼接（包括本节点的拼接）
         return all_combinations_matrix.view(N_exercise, N_kc, 2 * self.out_features)
 
     def __repr__(self):
@@ -282,6 +221,7 @@ class Exercise_KC_GraphAttentionLayer(nn.Module):
 
 
 
+# 聚集知识点信息获得属于习题节点的知识点信息，并对差异性信息进行组合处理
 class Exercise_KC_GraphConvolution(nn.Module):
     def __init__(self, in_features, out_features, dropout, alpha, concat=True):
         super(Exercise_KC_GraphConvolution, self).__init__()
@@ -308,6 +248,7 @@ class Exercise_KC_GraphConvolution(nn.Module):
         self.leakyrelu = nn.LeakyReLU(self.alpha)
 
     def forward(self, exercise_h, kc_h, adj_exercise_kc):
+        # 前面的nhead是聚合邻居信息
         if self.concat:
             kc_Wh = torch.mm(kc_h, self.W1)
             exercise_Wh = torch.mm(exercise_h, self.W1)
