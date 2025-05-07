@@ -1,5 +1,6 @@
 # KCMN
-The manuscript has not been published.
+Knowledge Concept-based Memory Network 
+
 This project is the Pytorch implementation for KCMN. 
 
 # Dataset
