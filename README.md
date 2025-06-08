@@ -33,7 +33,7 @@ __Environment__:
 * numpy 1.19.2
 
 # Running KCMN
-Here is a example for using FGKT model (on EdNet):  
+Here is a example for using KCMN model (on EdNet):  
 ```
   python main.py --dataset ednet  
 ```
